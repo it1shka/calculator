@@ -230,7 +230,7 @@ fn operation_result(operator: Token, a: Token, b: Token) -> Token{
         Token::Mul => operation = |a, b| a * b,
         Token::Div => operation = |a, b| a / b,
         Token::Pow => operation = |a, b| pow(a, b as i32),
-        _ => operation = |a, b| 0_f64
+        _ => operation = |_a, _b| 0_f64
     }
 
     match a{
