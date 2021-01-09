@@ -11,6 +11,7 @@ fn float(string: &String) -> f64{
     string.parse().unwrap()
 }
 
+#[derive(Debug)]
 enum Token { 
     Add, 
     Sub, 
@@ -24,34 +25,53 @@ enum Token {
 }
 
 impl Token {
-    fn precedence(&self) -> u8 {
+    fn prec(&self) -> Option<u8> {
         match *self {
-            Token::Add | Token::Sub => 1,
-            Token::Mul | Token::Div => 2,
-            Token::Pow => 3,
-            _ => 4
+            Token::Add | Token::Sub => Some(1),
+            Token::Mul | Token::Div => Some(2),
+            Token::Pow              => Some(3),
+            _                       => None
+        }
+    }
+
+    fn is_op(&self) -> bool {
+        match *self {
+            Token::Add 
+            | Token::Sub
+            | Token::Mul
+            | Token::Div
+            | Token::Pow
+                => true,
+            _ => false
+        }
+    }
+
+    fn is_num(&self) -> bool {
+        match *self {
+            Token::Int(_) | Token::Float(_) => true,
+            _ => false
         }
     }
 }
 
 impl fmt::Display for Token {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            Token::Add => write!(f, "Add"),
-            Token::Sub => write!(f, "Sub"),
-            Token::Mul => write!(f, "Mul"),
-            Token::Div => write!(f, "Div"),
-            Token::Pow => write!(f, "Pow"),
-            Token::Int(x) => write!(f, "Int {}", x),
-            Token::Float(x) => write!(f, "Float {}", x),
-            Token::LeftParen => write!(f, "Left Paren"),
-            Token::RightParen => write!(f, "Right Paren")
+            Token::Add => write!(f, "Add (+)"),
+            Token::Sub => write!(f, "Sub (-)"),
+            Token::Mul => write!(f, "Mul (*)"),
+            Token::Div => write!(f, "Div (/)"),
+            Token::Pow => write!(f, "Pow (^)"),
+            Token::Int(x) => write!(f, "Int ({})", x),
+            Token::Float(x) => write!(f, "Float ({})", x),
+            Token::LeftParen => write!(f, "Left Paren (\"(\")"),
+            Token::RightParen => write!(f, "Right Paren (\")\")")
         }
     }
 }
 
 struct TokenStream<'a> {
-    stream: Peekable<Chars<'a>>
+    stream: Peekable<Chars<'a>>,
 }
 
 impl <'a> TokenStream<'a> {
@@ -125,76 +145,145 @@ impl <'a> TokenStream<'a> {
 
 }
 
-struct Engine<'b> {
-    stream: TokenStream<'b>,
-    num_stack: Vec<Token>,
-    op_stack: Vec<Token>
+impl Iterator for TokenStream<'_> {
+    type Item = Token;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.read()
+    }
 }
 
-impl<'b> Engine<'b> {
+struct ShuntingYard<'a> {
+    stream: TokenStream<'a>,
+}
 
-    fn new(stream: TokenStream) -> Engine{
-        Engine{
-            stream,
-            num_stack: Vec::new(),
-            op_stack: Vec::new()
-        }
+impl<'a> ShuntingYard<'a> {
+    fn new(stream: TokenStream) -> ShuntingYard {
+        ShuntingYard { stream }
     }
 
-    fn run(&mut self){
-        while let Some(token) = self.stream.read() {
-            match token {
-                Token::Int(_) | Token::Float(_) => 
-                    self.num_stack.push(token),
-                Token::LeftParen => 
-                    self.op_stack.push(token),
-                Token::RightParen => 
-                    self.on_right_paren(),
-                Token::Add 
-                | Token::Sub 
-                | Token::Mul 
-                | Token::Div 
-                | Token::Pow => 
-                    self.on_operator(token)
+    fn get_stack(&mut self) -> Vec<Token> {
+        let mut tokens: Vec<Token> = Vec::new();
+        let mut op_stack: Vec<Token> = Vec::new();
+
+        for token in &mut self.stream {
+            if token.is_num(){
+                tokens.push(token);
+            }
+            else if token.is_op(){
+                while let Some(operator) = op_stack.last() {
+                    if operator.is_op() && 
+                        operator.prec().unwrap() >= token.prec().unwrap(){
+                        tokens.push(op_stack.pop().unwrap());
+                    }
+                    else {
+                        break;
+                    }
+                }
+                op_stack.push(token);
+            }
+            else if let Token::LeftParen = token {
+                op_stack.push(token);
+            }
+            else if let Token::RightParen = token {
+                let mut escaped = false;
+                while let Some(operator) = op_stack.pop() {
+                    if let Token::LeftParen = operator {
+                        escaped = true;
+                        break;
+                    }
+                    else {
+                        tokens.push(operator);
+                    }
+                }
+                if !escaped {
+                    panic!("Expected {}", Token::LeftParen);
+                }
+            }
+            else {
+                panic!("Unexpected token: {}", token);
             }
         }
-        self.clear_stack();
-        if self.num_stack.len() > 1 {
-            panic!("Incorrect input! Len(num_stack) > 1");
-        }
-        else if self.num_stack.len() == 0 {
-            println!("Expression is empty");
-        } 
-        else {
-            let last_token = self.num_stack.pop().unwrap();
-            match last_token {
-                Token::Float(x) => println!("{}", x),
-                Token::Int(x) => println!("{}", x),
-                _ => panic!("Illegal token on the top of the stack: {}", last_token)
+
+        while let Some(operator) = op_stack.pop() {
+            if let Token::LeftParen = operator {
+                panic!("Unexpected {}", Token::LeftParen);
             }
+            tokens.push(operator);
         }
+
+        tokens
     }
 
-    fn  on_right_paren(&mut self){
-        while let Some(token) = self.op_stack.pop(){
-            match token {
-                Token::LeftParen => return,
-                
+}
+
+fn pow(a: f64, b: i32) -> f64 {
+    if b <= 0 { 1_f64 }
+    else { a * pow(a, b - 1) }
+}
+
+fn operation_result(operator: Token, a: Token, b: Token) -> Token{
+    let operation: fn(f64, f64) -> f64;
+    match operator {
+        Token::Add => operation = |a, b| a + b,
+        Token::Sub => operation = |a, b| a - b,
+        Token::Mul => operation = |a, b| a * b,
+        Token::Div => operation = |a, b| a / b,
+        Token::Pow => operation = |a, b| pow(a, b as i32),
+        _ => operation = |a, b| 0_f64
+    }
+
+    match a{
+        Token::Int(x) => {
+            match b {
+                Token::Int(y) => Token::Int(
+                    operation(x as f64, y as f64) as i32),
+                Token::Float(y) => Token::Float(
+                    operation(x as f64, y)),
+                _ => Token::Int(0)
             }
+        },
+        Token::Float(x) => {
+            match b {
+                Token::Int(y) => 
+                    Token::Float(operation(x, y as f64)),
+                Token::Float(y) => 
+                    Token::Float(operation(x, y)),
+                _ => Token::Int(0)
+            }
+        },
+        _ => Token::Int(0)
+    }
+
+}
+
+fn run_stack(stack: Vec<Token>){
+    let mut mem: Vec<Token> = Vec::new();
+    for token in stack {
+        if token.is_num(){
+            mem.push(token);
         }
-        panic!("Expected \"(\"");
+        else if token.is_op(){
+            let b = mem.pop().expect("Operator must have two args");
+            let a = mem.pop().expect("Operator must have two args");
+            mem.push(operation_result(token, a, b));
+        }
     }
 
-    fn on_operator(&mut self, operator: Token){
-
+    let len = mem.len();
+    if len == 0 {
+        println!("0 (empty)");
     }
-
-    fn clear_stack(&mut self){
-
+    else if len == 1 {
+        match mem.pop().unwrap(){
+            Token::Int(x) => println!("{}", x),
+            Token::Float(x) => println!("{}", x),
+            _ => {}
+        }
     }
-
-    fn peform_operation(&mut self, operator: Token)
-
+    else {
+        panic!("Incorrect input!");
+    }
 }
 
 fn main(){
@@ -202,9 +291,16 @@ fn main(){
     loop {
         stdin().read_line(&mut user_input).unwrap();
         user_input = String::from(user_input.trim_end());
-        let mut stream = TokenStream::new(&user_input);
-        let mut engine = Engine::new(stream);
-        engine.run();
+
+        if user_input == "exit" {
+            return;
+        }
+
+        let stream = TokenStream::new(&user_input);
+        let mut shunting_yard = ShuntingYard::new(stream);
+        let stack = shunting_yard.get_stack();
+        run_stack(stack);
+
         user_input.clear();
     }
 }
